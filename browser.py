@@ -756,6 +756,10 @@ class UndetectBrowser:
         time.sleep(3)
 
         body = self.driver.find_element(By.TAG_NAME, "body")
+        try:
+            cloudflare = self.driver.find_element(By.CSS_SELECTOR, "body > div.main-wrapper > div > h1")
+        except:
+            cloudflare = None
         if "neterror" in body.get_attribute("class"):
             logger.info("Ошибка загрузки страницы (neterror)!")
             return False
@@ -767,6 +771,11 @@ class UndetectBrowser:
         elif "500 Internal Server Error" in self.driver.title:
             logger.info("Ошибка загрузки страницы (500 Internal Server Error)!")
             return False
+
+        elif cloudflare:
+            if urlparse(url).netloc in cloudflare.text:
+                logger.info("Ошибка загрузки страницы (CloudFlare)!")
+                return False
 
         self.page_load_count += 1
         self.download_website(url=url)

@@ -139,6 +139,7 @@ class AdBrowserProcessor:
                     break
 
                 count = 0
+                result = False
                 while count < 3:
                     try:
                         result = browser.build(
@@ -155,6 +156,17 @@ class AdBrowserProcessor:
                     except Exception as e:
                         print(info.url, e)
                         break
+
+                if not result:
+                    self._save_failed_link(info.url)
+
+    def _save_failed_link(self, url: str):
+        """Сохраняет неудачную ссылку в файл."""
+        try:
+            with open("failed_links.txt", "a", encoding="utf-8") as f:
+                f.write(f"{url}\n")
+        except Exception as e:
+            print(f"Не удалось сохранить ссылку {url}: {e}")
 
 
 if __name__ == "__main__":
