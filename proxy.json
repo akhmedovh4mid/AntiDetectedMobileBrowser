@@ -1,8 +1,8 @@
 {
     "lang": {
         "host": "123.123.123",
-        "port": 1234,
-        "username": "123123123",
-        "password": "123123123"
+        "port": 123,
+        "username": "qwerty",
+        "password": "qwerty"
     }
 }

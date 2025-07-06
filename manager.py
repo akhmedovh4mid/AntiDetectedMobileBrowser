@@ -7,6 +7,7 @@ from typing import Dict, Union
 class FileManager:
     @staticmethod
     def write_file(data: Dict[str, str], file_path: Union[Path, str]) -> None:
+        """Читает файл в формате `key: value` и возвращает словарь."""
         text = "\n".join(f"{key}: {value}" for key, value in data.items())
 
         if not isinstance(file_path, Path):
@@ -21,34 +22,43 @@ class DirManager:
     @staticmethod
     def move_to_numbered_dir(source_dir: Path, target_dir: Path) -> Path:
         """
-        Moves files from source_dir to a new numbered subdirectory in target_dir.
-        Returns path to the created subdirectory.
+        Перемещает все файлы из исходной директории в новую пронумерованную поддиректорию
+        внутри целевой директории. Нумерация начинается с 1 и увеличивается на основе
+        существующих пронумерованных папок.
 
-        Example:
-            If target_dir contains folders [1, 2], creates folder 3 and moves files there.
-            If target_dir is empty, creates folder 1.
+        Аргументы:
+            source_dir: Путь к исходной директории с файлами для перемещения
+            target_dir: Путь к целевой директории для создания пронумерованных поддиректорий
+
+        Возвращает:
+            Путь к созданной пронумерованной директории
+
+        Исключения:
+            FileNotFoundError: Если исходная директория не существует
+            NotADirectoryError: Если исходный путь не является директорией
         """
+        # Проверка существования и валидности исходной директории
         if not source_dir.exists():
-            raise FileNotFoundError(f"Source directory not found: {source_dir}")
-
+            raise FileNotFoundError(f"Исходная директория не найдена: {source_dir}")
         if not source_dir.is_dir():
-            raise NotADirectoryError(f"Source path is not a directory: {source_dir}")
+            raise NotADirectoryError(f"Указанный путь не является директорией: {source_dir}")
 
-        # Ensure target_dir exists
+        # Создаем целевую директорию (если не существует)
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # Find existing numbered folders
-        existing_folders = []
-        for item in target_dir.iterdir():
-            if item.is_dir() and item.name.isdigit():
-                existing_folders.append(int(item.name))
+        # Получаем список существующих номеров поддиректорий
+        existing_numbers = [
+            int(folder.name)
+            for folder in target_dir.iterdir()
+            if folder.is_dir() and folder.name.isdigit()
+        ]
 
-        # Determine next folder number
-        next_number = max(existing_folders) + 1 if existing_folders else 1
+        # Определяем следующий доступный номер
+        next_number = max(existing_numbers) + 1 if existing_numbers else 1
         new_folder = target_dir / str(next_number)
-        new_folder.mkdir()
+        new_folder.mkdir()  # Создаем новую пронумерованную папку
 
-        # Move files
+        # Перемещаем все файлы из исходной директории
         for item in source_dir.iterdir():
             if item.is_file():
                 shutil.move(str(item), str(new_folder / item.name))
@@ -76,6 +86,6 @@ class DirManager:
         # Удаляем всё содержимое папки
         for item in folder_path.iterdir():
             if item.is_file():
-                item.unlink()  # Удаляем файл
+                item.unlink()
             elif item.is_dir():
                 shutil.rmtree(item)

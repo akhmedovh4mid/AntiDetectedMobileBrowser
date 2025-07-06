@@ -1,3 +1,5 @@
+import base64
+import math
 import os
 import time
 import shutil
@@ -7,13 +9,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Dict, List, Optional, Set, Tuple
 from playwright.sync_api import sync_playwright, Request, Response
+from playwright.sync_api import Error as PlaywrightError
 
 
 
 class MobileBrowser:
     def __init__(
         self,
-        device: str = 'iPhone 15 Pro Max',
+        device: str = 'iPhone 13',
         proxy: str = 'socks5://127.0.0.1:2080',
         headless: bool = False
     ) -> None:
@@ -45,17 +48,78 @@ class MobileBrowser:
         """Автоматическое закрытие при выходе из контекста"""
         self.close()
 
+    def _add_context_stcripts(self) -> None:
+        self.context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined,
+            configurable: true
+        });
+        delete navigator.__proto__.webdriver;
+        window.cdc_adoQpoasnfa76pfcZLmcfl_Array = undefined;
+        """)
+        self.context.add_init_script("""
+        Object.defineProperty(navigator, 'platform', {
+            get: () => 'iPhone'
+        });
+        """)
+        self.context.add_init_script("""
+        Object.defineProperty(navigator, 'vendor', {
+            value: 'Apple Computer, Inc.',
+            configurable: false,
+            enumerable: true,
+            writable: false
+        });
+        """)
+        self.context.add_init_script("""
+        // Переопределяем WebGLRenderingContext
+        const originalGetParameter = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function(parameter) {
+            if (parameter === 37445) return 'Apple Inc.';       // VENDOR
+            if (parameter === 37446) return 'Apple GPU';        // RENDERER
+            return originalGetParameter.call(this, parameter);  // Остальные параметры без изменений
+        };
+
+        // Переопределяем WebGL2RenderingContext
+        const originalGetParameterWebGL2 = WebGL2RenderingContext.prototype.getParameter;
+        WebGL2RenderingContext.prototype.getParameter = function(parameter) {
+            if (parameter === 37445) return 'Apple Inc.';
+            if (parameter === 37446) return 'Apple GPU';
+            return originalGetParameterWebGL2.call(this, parameter);
+        };
+        """)
+        self.context.add_init_script("""
+        // Переопределяем BatteryManager API
+        Object.defineProperty(navigator, 'getBattery', {
+            value: () => Promise.resolve({
+                charging: false,
+                level: 0.77,
+                chargingTime: Infinity,
+                dischargingTime: 8940,
+                addEventListener: () => {}
+            }),
+            configurable: false,
+            enumerable: true,
+            writable: false
+        });
+        """)
+
     def launch(self) -> None:
         """Запуск браузера с настройками"""
         self.playwright = sync_playwright().start()
         mobile = self.playwright.devices[self.device]
 
-        self.browser = self.playwright.webkit.launch(
+        self.browser = self.playwright.chromium.launch(
             headless=self.headless,
-            proxy={'server': self.proxy} if self.proxy else None
+            proxy={'server': self.proxy} if self.proxy else None,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-automation'
+            ]
         )
 
         self.context = self.browser.new_context(**mobile)
+        self._add_context_stcripts()
+
         self.page = self.context.new_page()
 
         self.page.on("request", lambda request: self.requests.add(request))
@@ -72,7 +136,7 @@ class MobileBrowser:
         if delay > 0:
             time.sleep(delay)
 
-    def screenshot(self, screenshot_path: str, full_page: bool = True) -> None:
+    def screenshot(self, screenshot_path: str) -> None:
         """
         Сохраняет скриншот текущей страницы
 
@@ -84,10 +148,16 @@ class MobileBrowser:
 
         self.page.screenshot(
             path=screenshot_path,
-            full_page=full_page,
+            full_page=True,
             type="png",
             timeout=5000
         )
+
+    def pdf(self, pdf_path: str) -> None:
+        if not self.page:
+            raise RuntimeError("Страница не инициализирована. Сначала вызовите launch()")
+
+        self.page.pdf(path=pdf_path)
 
     def close(self) -> None:
         """Закрытие браузера и освобождение ресурсов"""
@@ -230,7 +300,6 @@ class MobileBrowser:
                     links.append(temp_url)
 
             for item in links:
-                print(item, url_mapping[url][0])
                 html_content = html_content.replace(item, url_mapping[url][0])
 
         return html_content
