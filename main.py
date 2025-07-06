@@ -1,182 +1,71 @@
 import json
-import os
-import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
-import requests
+
 from openpyxl import load_workbook
-from dataclasses import dataclass
+from datetime import datetime
 
-from utils import get_country_info
-from browser import GeoConfig, MobileBrowserConfig, ProxyConfig, UndetectBrowser
+from proxy.nekoray import Proxy
+from browser import MobileBrowser
+from manager import FileManager, DirManager
 
+with open("proxy.json", "r") as file:
+    proxy_list: dict = json.load(file)
 
-@dataclass
-class AdInfo:
-    url: str
-    description: str
-    ad_img: str
+wb = load_workbook("ads.xlsx")
+sheet = wb.active
+result_column = sheet.max_column
 
+row = 1
+while True:
+    link = sheet.cell(row=row, column=3).value
+    if link == None:
+        break
 
-class ExcelDataHandler:
-    def __init__(self):
-        self.data: Dict[str, List[AdInfo]] = {}
+    title = sheet.cell(row=row, column=4).value
+    lang = sheet.cell(row=row, column=5).value.lower()
+    if lang not in proxy_list.keys() and lang != "ru":
+        continue
 
-    def get_valid_excel_path(self) -> str:
-        """Запрашивает путь к файлу, пока не будет введен корректный."""
-        parser = argparse.ArgumentParser(description='Process Excel file with advertisement data')
-        parser.add_argument('file_path', type=str, help='Path to Excel file (.xlsx)')
-        args = parser.parse_args()
+    image = sheet.cell(row=row, column=8).value
+    description = sheet.cell(row=row, column=9).value
 
-        path = args.file_path.strip()
+    if lang != "ru":
+        proxy = proxy_list[lang]
+        with Proxy(proxy["host"], proxy["port"], proxy["username"], proxy["password"]):
+            with MobileBrowser(device="Pixel 7", headless=False) as browser:
+                browser.goto(link, delay=3)
+                is_downloaded = browser.download_website("website")
 
-        if not path:
-            raise ValueError("❌ Путь не может быть пустым")
+                if not is_downloaded:
+                    DirManager.clear_directory(Path("temp"))
+                    continue
 
-        if not path.lower().endswith('.xlsx'):
-            raise ValueError("❌ Файл должен быть в формате .xlsx!")
+                # browser.screenshot("temp/screenshot.png")
 
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"❌ Файл '{path}' не найден!")
-
-        return path
-
-    def load_data(self, file_path: str) -> Dict[str, List[AdInfo]]:
-        try:
-            wb = load_workbook(file_path, data_only=True)
-            sheet = wb.active
-
-            print(f"\nФайл '{file_path}' успешно загружен. Данные:")
-
-            for row in sheet.iter_rows(values_only=True):
-                url = row[2]
-                description = row[8] if row[8] != "null" else row[3]
-                lang = row[4] if row[4] is not None else "undefined"
-                ad_img = row[7]
-
-                ad_info = AdInfo(url=url, description=description, ad_img=ad_img)
-
-                if lang in self.data:
-                    self.data[lang].append(ad_info)
-                else:
-                    self.data[lang] = [ad_info]
-
-            return self.data
-
-        except Exception as e:
-            print(f"⚠️ Ошибка при загрузке файла: {e}")
-            raise
-
-
-class AdBrowserProcessor:
-    def __init__(self, data: Dict[str, List[AdInfo]]):
-        self.data = data
-        self.proxy_list_path = Path("proxy.json")
-        self.proxy_list = None
-
-        if self.proxy_list_path.exists():
-            with self.proxy_list_path.open(mode="r", encoding='utf-8') as file:
-                try:
-                    self.proxy_list = json.load(file)  # Загружаем JSON в словарь
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"Ошибка парсинга proxy.json: {e}")
+        if description != "null":
+            FileManager.write_file({"url": link, "description": description, "time": datetime.now().isoformat()}, file_path="temp/info.txt")
         else:
-            raise FileNotFoundError("Файл proxy.json не найден")
+            FileManager.write_file({"url": link, "description": title, "time": datetime.now().isoformat()}, file_path="temp/info.txt")
 
-    def process_ads(self):
-        for lang, info_list in self.data.items():
-            country_data = get_country_info(country_code=lang)
+    else:
+        with MobileBrowser(device="Pixel 7", headless=False) as browser:
+            browser.goto(link, delay=3)
+            is_downloaded = browser.download_website("website")
 
-            proxy = self._get_proxy_config(lang)
-            if proxy == None and lang != "ru":
-                continue
+            if not is_downloaded:
+                    DirManager.clear_directory("temp")
+                    continue
 
-            mobile_config = self._get_mobile_config(country_data)
-            geo_config = self._get_geo_config(country_data)
+            # browser.screenshot("temp/screenshot.png")
 
-            self._process_with_browser(info_list, proxy, mobile_config, geo_config)
+        if description != "null":
+            FileManager.write_file({"url": link, "description": description, "time": datetime.now().isoformat()}, file_path="temp/info.txt")
+        else:
+            FileManager.write_file({"url": link, "description": title, "time": datetime.now().isoformat()}, file_path="temp/info.txt")
 
-    def _get_proxy_config(self, lang: str) -> Optional[ProxyConfig]:
-        if lang == "ru":
-            return None
+    dirname = DirManager.move_to_numbered_dir(Path("temp"), Path("websites"))
 
-        if proxy := self.proxy_list.get(lang):
-            return ProxyConfig(
-                host=proxy["host"],
-                port=proxy["port"],
-                username=proxy["username"],
-                password=proxy["password"]
-            )
+    sheet.cell(row=row, column=result_column + 1, value=str(dirname.absolute()))
+    wb.save("ads.xlsx")
 
-        return None
-
-    def _get_mobile_config(self, country_data: dict) -> MobileBrowserConfig:
-        return MobileBrowserConfig(
-            user_agent="Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.1234.56 Mobile Safari/537.36",
-            width=360,
-            height=640,
-            pixel_ratio=3.0,
-            language=country_data["language"],
-            headless=False
-        )
-
-    def _get_geo_config(self, country_data: dict) -> GeoConfig:
-        return GeoConfig(
-            timezone=country_data["timezone"],
-            latitude=country_data["latitude"],
-            longitude=country_data["longitude"]
-        )
-
-    def _process_with_browser(self, info_list: List[AdInfo], proxy: Optional[ProxyConfig],
-                            mobile_config: MobileBrowserConfig, geo_config: GeoConfig):
-        with UndetectBrowser(
-            proxy_config=proxy,
-            browser_config=mobile_config,
-            geo_config=geo_config
-        ) as browser:
-            for info in info_list:
-                if info.url is None:
-                    break
-
-                count = 0
-                result = False
-                while count < 3:
-                    try:
-                        result = browser.build(
-                            url=info.url if info.url.startswith("http") else f"https://{info.url}",
-                            ad_image_url=info.ad_img,
-                            description=info.description
-                        )
-
-                        if result:
-                            break
-
-                        count += 1
-
-                    except Exception as e:
-                        print(info.url, e)
-                        break
-
-                if not result:
-                    self._save_failed_link(info.url)
-
-    def _save_failed_link(self, url: str):
-        """Сохраняет неудачную ссылку в файл."""
-        try:
-            with open("failed_links.txt", "a", encoding="utf-8") as f:
-                f.write(f"{url}\n")
-        except Exception as e:
-            print(f"Не удалось сохранить ссылку {url}: {e}")
-
-
-if __name__ == "__main__":
-    try:
-        handler = ExcelDataHandler()
-        file_path = handler.get_valid_excel_path()
-        data = handler.load_data(file_path)
-
-        processor = AdBrowserProcessor(data)
-        processor.process_ads()
-
-    except Exception as e:
-        print(f"Произошла ошибка: {e}")
+    row += 1
