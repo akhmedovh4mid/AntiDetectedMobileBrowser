@@ -1,8 +1,24 @@
 {
-    "lang": {
+    "lang_1": {
         "host": "123.123.123",
         "port": 123,
-        "username": "qwerty",
-        "password": "qwerty"
+        "username": "username",
+        "password": "password",
+        "timezone": "Europe/Moscow",
+        "locale": "ru-RU",
+        "longitude": 37.61556,
+        "lantitude": 55.75222,
+        "zipcode": "101000"
+    },
+    "lang_2": {
+        "host": "123.123.123",
+        "port": 123,
+        "username": "username",
+        "password": "password",
+        "timezone": "Europe/Moscow",
+        "locale": "ru-RU",
+        "longitude": 37.61556,
+        "lantitude": 55.75222,
+        "zipcode": "101000"
     }
 }
