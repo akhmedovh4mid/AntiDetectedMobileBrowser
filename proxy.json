@@ -1,24 +1,35 @@
 {
-    "lang_1": {
-        "host": "123.123.123",
-        "port": 123,
-        "username": "username",
-        "password": "password",
-        "timezone": "Europe/Moscow",
-        "locale": "ru-RU",
-        "longitude": 37.61556,
-        "lantitude": 55.75222,
+    "ch": {
+        "host": "proxy.soax.com",
+        "port": 23319,
+        "username": "k4y7tvrLJrU1dl2M",
+        "password": "wifi;ch;;;",
+        "timezone": "Europe/Zurich",
+        "locale": "de-CH",
+        "longitude": 8.2275,
+        "lantitude": 46.8182,
         "zipcode": "101000"
     },
-    "lang_2": {
-        "host": "123.123.123",
-        "port": 123,
-        "username": "username",
-        "password": "password",
-        "timezone": "Europe/Moscow",
-        "locale": "ru-RU",
-        "longitude": 37.61556,
-        "lantitude": 55.75222,
-        "zipcode": "101000"
+    "ua": {
+        "host": "proxy.soax.com",
+        "port": 23319,
+        "username": "k4y7tvrLJrU1dl2M",
+        "password": "wifi;ua;;;",
+        "timezone": "Europe/Kyiv",
+        "locale": "uk-UA",
+        "longitude": 25.9448,
+        "lantitude": 48.2932,
+        "zipcode": "58012"
+    },
+    "ca": {
+        "host": "proxy.soax.com",
+        "port": 23319,
+        "username": "k4y7tvrLJrU1dl2M",
+        "password": "wifi;ca;;;",
+        "timezone": "America/Toronto",
+        "locale": "en-CA",
+        "longitude": -75.6972,
+        "lantitude": 45.4215,
+        "zipcode": "K1A 0A9"
     }
 }

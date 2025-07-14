@@ -19,9 +19,10 @@ VENV_NAME = ".venv"
 REQUIREMENTS = [
     "openpyxl==3.1.5",
     "playwright==1.53.0",
-    "requests==2.32.4",
+    "requests[socks]",
     "pydantic==2.11.7",
-    "psutil==7.0.0"
+    "psutil==7.0.0",
+    "beautifulsoup4==4.13.4"
 ]
 
 def create_venv():

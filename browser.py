@@ -1,14 +1,18 @@
 import os
+import re
 import time
 import shutil
 import logging
 import requests
 
 from pathlib import Path
+from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from typing import Dict, List, Optional, Set, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright, Request, Response
+
+from proxy.nekoray import Proxy
 
 
 logging.basicConfig(
@@ -149,6 +153,7 @@ class Browser:
 class MobileBrowser:
     def __init__(
         self,
+        timezone: Optional[str] = None,
         locale: Optional[str] = None,
         longitude: Optional[float] = None,
         lantitude: Optional[float] = None,
@@ -171,6 +176,7 @@ class MobileBrowser:
         self.device = device
         self.proxy = proxy
         self.headless = headless
+        self.timezone = timezone
         self.locale = locale
         self.longitude = longitude
         self.lantitude = lantitude
@@ -261,7 +267,41 @@ class MobileBrowser:
                 enumerable: true,
                 writable: false
             });
+            """,
+            # Эмуляция Touch API
             """
+            Object.defineProperty(navigator, 'maxTouchPoints', {
+                get: () => 5
+            });
+            """,
+            # Эмуляция Connection API
+            """
+            Object.defineProperty(navigator, 'connection', {
+                get: () => ({
+                    downlink: 10,
+                    effectiveType: "4g",
+                    rtt: 50,
+                    saveData: false,
+                    type: "cellular"
+                })
+            });
+            """,
+            # Эмуляция Screen Orientation
+            """
+            Object.defineProperty(screen, 'orientation', {
+                get: () => ({
+                    angle: 0,
+                    type: "portrait-primary",
+                    onchange: null
+                })
+            });
+            """,
+            # Эмуляция Device Pixel Ratio
+            """
+            Object.defineProperty(window, 'devicePixelRatio', {
+                get: () => 3  // Типичное значение для современных смартфонов
+            });
+            """,
         ]
 
         for script in scripts:
@@ -276,10 +316,14 @@ class MobileBrowser:
 
             self.browser = self.playwright.chromium.launch(
                 headless=self.headless,
+                ignore_default_args=['--enable-automation'],
+                chromium_sandbox=False,
                 proxy={'server': self.proxy} if self.proxy else None,
                 args=[
                     '--disable-blink-features=AutomationControlled',
                     '--disable-automation',
+                    '--enable-touch-events',
+                    '--simulate-touch-screen-with-mouse',
                 ]
             )
 
@@ -287,12 +331,14 @@ class MobileBrowser:
                 logger.debug(f"Создание мобильного контекста с локалью: {self.locale}, геолокацией и почтовым индексом")
                 self.context = self.browser.new_context(
                     **mobile,
+                    color_scheme="light",
                     locale=self.locale,
                     geolocation={"latitude": self.lantitude, "longitude": self.lantitude},
                     permissions=["geolocation"],
                     extra_http_headers={
                         "X-Postal-Code": self.zipcode
-                    }
+                    },
+                    timezone_id=self.timezone
                 )
             else:
                 logger.debug("Создание мобильного контекста без локали/геолокации")
@@ -300,6 +346,7 @@ class MobileBrowser:
 
             self._add_context_stcripts()
             self.page = self.context.new_page()
+            self.page.emulate_media(color_scheme='light')
 
             # Подписка на события запросов и ответов
             self.page.on("request", lambda request: self.requests.add(request))
@@ -363,7 +410,19 @@ class MobileBrowser:
             raise RuntimeError("Страница не инициализирована. Сначала вызовите launch()")
 
         try:
-            self.page.pdf(path=pdf_path)
+            self.page.pdf(
+                path=pdf_path,
+                print_background=True,
+                scale=1.0,
+                margin={
+                    "top": "0px",
+                    "right": "0px",
+                    "bottom": "0px",
+                    "left": "0px"
+                },
+                prefer_css_page_size=True,
+                display_header_footer=False,
+                )
             logger.info("PDF успешно сохранен")
         except Exception as e:
             logger.error(f"Ошибка при сохранении PDF: {str(e)}")
@@ -418,23 +477,35 @@ class MobileBrowser:
             logger.warning(f"Превышено время ожидания загрузки страницы: {str(e)}")
 
         # 2. Прокручиваем страницу до конца (для ленивой загрузки)
-        last_height = self.page.evaluate("document.body.scrollHeight")
+        last_height = self.page.evaluate("""() => {
+            const bodyHeight = document.body.scrollHeight;
+            return bodyHeight > 0 ? bodyHeight : document.documentElement.scrollHeight;
+        }""")
         scroll_attempts = 0
 
         while scroll_attempts < max_scroll_attempts:
-            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            self.page.evaluate("""() => {
+                const scrollHeight = document.body.scrollHeight > 0
+                    ? document.body.scrollHeight
+                    : document.documentElement.scrollHeight;
+                window.scrollTo(0, scrollHeight);
+            }""")
             logger.debug(f"Попытка прокрутки {scroll_attempts + 1}/{max_scroll_attempts}")
 
             try:
-                self.page.wait_for_function(
-                    "prevHeight => document.body.scrollHeight > prevHeight",
-                    arg=last_height,
-                    timeout=2000,
-                )
+                self.page.wait_for_function("""(prevHeight) => {
+                    const currentHeight = document.body.scrollHeight > 0
+                        ? document.body.scrollHeight
+                        : document.documentElement.scrollHeight;
+                    return currentHeight > prevHeight;
+                }""", arg=last_height, timeout=2000)
             except Exception:
                 break
 
-            new_height = self.page.evaluate("document.body.scrollHeight")
+            new_height = self.page.evaluate("""() => {
+                const bodyHeight = document.body.scrollHeight;
+                return bodyHeight > 0 ? bodyHeight : document.documentElement.scrollHeight;
+            }""")
             if new_height == last_height:
                 logger.debug("Высота страницы не изменилась после прокрутки")
                 break
@@ -484,10 +555,11 @@ class MobileBrowser:
                     logger.warning(f"Не удалось определить имя файла из URL: {url}")
                     continue
 
+                filename = f"_{filename}"
                 filepath = download_dir / filename
 
                 # Загрузка файла по частям
-                with open(filepath, 'wb') as f:
+                with filepath.open("wb") as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
@@ -569,7 +641,13 @@ class MobileBrowser:
             for item in links:
                 html_content = html_content.replace(item, url_mapping[url][0])
 
-        return html_content
+        # Удаление тега base
+        soup = BeautifulSoup(html_content, 'html.parser')
+        for base_tag in soup.find_all('base'):
+            base_tag.decompose()
+
+        return soup.prettify()
+
 
     def download_website(self, output_subdir: Optional[str] = None, make_zip: bool = True, remove_source: bool = True) -> bool:
         """
@@ -598,7 +676,6 @@ class MobileBrowser:
             html = self.page.content()
             url_mapping = self.download_resources(self.requests, folder_name)
 
-            # Сохраняем HTML
             output_html_path = website_dir / 'index.html'
             with open(output_html_path, 'w', encoding='utf-8') as f:
                 f.write(self.replace_urls_in_html(html, url_mapping))
@@ -634,6 +711,8 @@ class MobileBrowser:
 
 # Пример использования
 if __name__ == "__main__":
-    with MobileBrowser(proxy=None) as browser:
-        browser.goto('https://transactionsupportde.com/', delay=3)
-        browser.download_website()
+    with Proxy(host="proxy.soax.com", port=23319, username="k4y7tvrLJrU1dl2M", password="wifi;ca;;;"):
+        with MobileBrowser() as browser:
+            browser.goto('https://melkravaagency.com/?utm_source=google&utm_medium=cpc&utm_campaign=example_campaign&utm_term=example_keyword&utm_content=example_ad_content&gclid=EAIaIQobChMI2pS8sP_8_QIVFMd3Ch0xLAIyEAAYASAAEgK1CvD_AzB', delay=3)
+            # time.sleep(10000)
+            browser.download_website()

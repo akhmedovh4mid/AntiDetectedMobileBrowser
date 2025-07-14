@@ -314,12 +314,14 @@ class WebsiteProcessor:
                     ))
                     return False
 
-                try:
-                    browser.screenshot("temp/screenshot.png")
-                    self.logger.debug("Скриншот сохранен в PNG")
-                except:
-                    browser.pdf("temp/screenshot.pdf")
-                    self.logger.debug(f"Скриншот сохранен в PDF (ошибка PNG: {str(e)})")
+                # try:
+                #     browser.screenshot("temp/screenshot.png")
+                #     self.logger.debug("Скриншот сохранен в PNG")
+                # except:
+                # browser.my_screenshot("temp/screenshot_1.pdf")
+
+                browser.pdf("temp/screenshot.pdf")
+                self.logger.debug(f"Скриншот сохранен в PDF")
 
             self.download_image(work.image_url, "temp/image.png")
             self._save_info_file(work.link, work.title, work.description)

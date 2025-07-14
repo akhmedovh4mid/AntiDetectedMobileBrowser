@@ -14,7 +14,7 @@ class FileManager:
             file_path = Path(file_path)
 
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        with file_path.open("w") as file:
+        with file_path.open("w", encoding="utf-8") as file:
             file.write(text)
 
 
