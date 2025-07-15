@@ -1,8 +1,10 @@
 import os
-import re
 import time
 import shutil
+import certifi
+import hashlib
 import logging
+import subprocess
 import requests
 
 from pathlib import Path
@@ -458,7 +460,7 @@ class MobileBrowser:
         self,
         timeout: int = 30,
         max_scroll_attempts: int = 10,
-        request_timeout: float = 2.0
+        request_timeout: float = 5.0
     ) -> None:
         """
         Ожидание полной загрузки страницы с прокруткой и проверкой активных запросов
@@ -528,7 +530,7 @@ class MobileBrowser:
                 logger.debug("Обнаружены новые запросы, сброс таймера")
                 start_time = time.time()
 
-    def _download_file(self, request: Tuple[str, str], download_dir: Path) -> Optional[Tuple[str, str]]:
+    def _download_file(self, request: Tuple[str, str, str], download_dir: Path) -> Optional[Tuple[str, str, str]]:
         """
         Загрузка файла с обработкой ошибок и повторами
 
@@ -538,42 +540,117 @@ class MobileBrowser:
         """
         max_retries = 3
         retry_delay = 1
-        url = request[0]
-        referer = request[1]
+        url = request["url"]
+        referer = request["referer"]
+        body = request["body"]
+        curl_path = Path("curl/bin/curl.exe")
 
-        logger.info(f"Загрузка файла: {url}")
+        logger.info(f"Начало загрузки файла: {url}")
 
         for attempt in range(max_retries):
             try:
-                session = requests.Session()
-                response = session.get(url, timeout=10)
-                response.raise_for_status()
-
                 # Определение имени файла
                 filename = os.path.basename(url).split("?")[0]
-                if not filename:
-                    logger.warning(f"Не удалось определить имя файла из URL: {url}")
+                hash_name = hashlib.sha256(url.encode()).hexdigest()
+                hash_filename = f"{hash_name}_{filename}"
+                filepath = download_dir / hash_filename
+
+                logger.debug(f"Попытка {attempt + 1}/{max_retries}: Загрузка {url} в {filepath}")
+
+                # Базовые параметры curl
+                command = [
+                    str(curl_path.absolute()),
+                    "-x", "socks5h://127.0.0.1:2080",  # Используем socks5h для DNS через прокси
+                    "-o", str(filepath.absolute()),
+                    "--silent",  # Отключаем вывод прогресса
+                    "--show-error",  # Показываем только ошибки
+                    "--fail",  # Возвращаем ошибку при HTTP 4xx/5xx
+                    "--max-time", "30",  # Таймаут 30 секунд
+                    "--retry-delay", str(retry_delay),  # Задержка между попытками
+                    "--retry", "3",  # Число повторов для временных ошибок
+                    "--location"  # Следовать редиректам
+                ]
+
+                # Добавляем опцию для SSL (3 варианта в порядке приоритета)
+                if Path(certifi.where()).exists():
+                    logger.debug("Используется сертификат из certifi")
+                    command.extend(["--cacert", str(Path(certifi.where()))])  # Используем certifi
+                else:
+                    logger.warning("Сертификат certifi не найден, отключаем проверку SSL")
+                    command.append("--insecure")  # Fallback: отключаем проверку SSL
+
+                # Добавляем Referer если указан
+                if referer:
+                    logger.debug(f"Добавляем Referer: {referer}")
+                    command.extend(["-H", f"Referer: {referer}"])
+
+                # Добавляем URL в конец команды
+                command.append(url)
+
+                logger.debug(f"Выполняемая команда curl: {' '.join(command)}")
+
+                # Выполняем запрос
+                result = subprocess.run(
+                    command,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+
+                # Проверяем, что файл действительно скачан
+                if filepath.exists():
+                    if filepath.stat().st_size > 0:
+                        logger.info(f"Файл успешно загружен: {url} -> {filepath} ({filepath.stat().st_size} байт)")
+                        return (url, hash_filename, referer)
+                    else:
+                        logger.warning(f"Файл скачан, но пустой: {filepath}")
+                        continue
+                else:
+                    logger.warning(f"Файл не был создан после загрузки: {url}")
                     continue
 
-                filename = f"_{filename}"
-                filepath = download_dir / filename
+            except subprocess.CalledProcessError as e:
+                error_msg = e.stderr.strip() if e.stderr else "Неизвестная ошибка curl"
+                logger.warning(f"Ошибка при загрузке {url} (попытка {attempt + 1}/{max_retries}): {error_msg}")
 
-                # Загрузка файла по частям
-                with filepath.open("wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+                # Если это SSL ошибка (код 60), пробуем следующую стратегию
+                if "60" in error_msg:
+                    logger.info("Обнаружена SSL ошибка, пробуем отключить проверку сертификата")
+                    command.append("--insecure")
+                    continue
 
+            except Exception as e:
+                logger.error(f"Неожиданная ошибка при загрузке {url} (попытка {attempt + 1}/{max_retries}): {str(e)}", exc_info=True)
 
-                logger.info(f"Файл {url} успешно загружен в {filepath}")
-                return (url, filename, referer)
+            if attempt < max_retries - 1:
+                delay = retry_delay * (attempt + 1)
+                logger.info(f"Повторная попытка через {delay} сек...")
+                time.sleep(delay)
+            else:
+                logger.error(f"Не удалось загрузить {url} после {max_retries} попыток")
 
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Попытка {attempt + 1} не удалась для {url}: {str(e)}")
-                if attempt == max_retries - 1:
-                    logger.error(f"Не удалось загрузить {url} после {max_retries} попыток")
-                    return None
-                time.sleep(retry_delay * (attempt + 1))
+        if body is not None:
+            try:
+                filename = os.path.basename(url).split("?")[0]
+                hash = hashlib.sha256(url.encode()).hexdigest()
+                hash_filename = f"{hash}_{filename}"
+                filepath = download_dir / hash_filename
+
+                logger.info(f"Используем fallback - сохранение body в файл: {filepath}")
+
+                with open(filepath, 'wb') as file:
+                    file.write(body)
+
+                if filepath.exists() and filepath.stat().st_size > 0:
+                    logger.info(f"Файл успешно сохранен из body: {filepath} ({filepath.stat().st_size} байт)")
+                    return (url, hash_filename, referer)
+                else:
+                    logger.error("Не удалось сохранить файл из body")
+            except Exception as e:
+                logger.error(f"Ошибка при сохранении body в файл: {str(e)}", exc_info=True)
+
+        return None
 
     def download_resources(self, requests: Set[Request], download_dir: str = "temp") -> Dict[str, str]:
         """
@@ -589,7 +666,29 @@ class MobileBrowser:
         download_path.mkdir(parents=True, exist_ok=True)
 
         result = {}
-        data = [(request.url, request.header_value("Referer")) for request in requests]
+        content_type_list = [
+            "audio", "audioworklet", "document", "embed",
+            "empty", "font", "frame", "iframe", "image",
+            "manifest", "object", "paintworklet", "report",
+            "script", "serviceworker", "sharedworker", "style",
+            "track", "video", "worker", "xslt"
+        ]
+
+        data = []
+        for request in requests:
+            ans = {"url": request.url, "referer": request.header_value("Referer"), "body": None}
+            if str(request.header_value("sec-fetch-dest")).lower() in content_type_list:
+                count = 0
+                while count < 3:
+                    try:
+                        ans["body"] = request.response().body()
+                        break
+                    except:
+                        count += 1
+                        time.sleep(0.2)
+                        continue
+
+            data.append(ans)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_request = {
@@ -713,6 +812,7 @@ class MobileBrowser:
 if __name__ == "__main__":
     with Proxy(host="proxy.soax.com", port=23319, username="k4y7tvrLJrU1dl2M", password="wifi;ca;;;"):
         with MobileBrowser() as browser:
-            browser.goto('https://melkravaagency.com/?utm_source=google&utm_medium=cpc&utm_campaign=example_campaign&utm_term=example_keyword&utm_content=example_ad_content&gclid=EAIaIQobChMI2pS8sP_8_QIVFMd3Ch0xLAIyEAAYASAAEgK1CvD_AzB', delay=3)
+            url = "https://melkravaagency.com/?utm_source=google&utm_medium=cpc&utm_campaign=example_campaign&utm_term=example_keyword&utm_content=example_ad_content&gclid=EAIaIQobChMI2pS8sP_8_QIVFMd3Ch0xLAIyEAAYASAAEgK1CvD_AzB"
+            browser.goto(url, delay=3)
             # time.sleep(10000)
             browser.download_website()
